@@ -1,7 +1,6 @@
-# Cargo.toml
-
 [package]
 name = "ddos-event-collector"
+description = "Webhook Manager (RabbitMQ ⇄ Kafka)"
 version = "1.0.0"
 edition = "2021"
 

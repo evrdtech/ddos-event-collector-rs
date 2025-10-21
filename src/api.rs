@@ -16,7 +16,10 @@ use std::net::SocketAddr;
 
 use crate::models::*;
 
-const VERSION: &str = "0.1.0";
+/// Returns the application version declared in Cargo.toml.
+fn application_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
 
 // Helper function to check if node_id is set
 async fn check_node_id_set() -> Result<(), Response> {
@@ -653,7 +656,7 @@ pub async fn get_status(
         pending_events,
         node_info: NodeInfo {
             node_id,
-            version: VERSION.to_string(),
+            version: application_version().to_string(),
             region: None,
             name: "node-01".to_string(),
             started_at: Utc::now().to_rfc3339(),
@@ -711,7 +714,7 @@ pub async fn set_node_info(
         Ok(_) => {
             let node_info = NodeInfo {
                 node_id: node_info_req.node_id,
-                version: VERSION.to_string(),
+                version: application_version().to_string(),
                 region: Some(node_info_req.region),
                 name: node_info_req.name,
                 started_at: Utc::now().to_rfc3339(),
