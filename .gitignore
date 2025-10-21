@@ -1,0 +1,97 @@
+/events.db
+/target/
+
+# ===================================
+# Common .gitignore for Rust projects
+# ===================================
+
+# Compiled source
+#################
+**/*.rs.bk
+
+# Cargo package
+#################
+# Remove Cargo.lock from gitignore if you build libraries to share on crates.io
+Cargo.lock
+
+# Build artifacts
+#################
+*.rlib
+*.rmeta
+*.dSYM
+*.pdb
+
+# Generated files
+#################
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+*.o
+
+# Coverage / Testing / Benchmark tools
+######################################
+htmlcov/
+coverage/
+*.profraw
+*.profdata
+*.gcda
+*.gcno
+*.gcov
+*.grcov/
+*.lcov
+
+# Logs / Debug / Dumps
+##############
+*.log
+*.tmp
+*.swp
+*.swo
+*.old
+*.stackdump
+*.core
+
+# IDE / Editor files
+####################
+# VS Code
+.vscode/
+# JetBrains (CLion, IntelliJ)
+.idea/
+
+# OS files
+##########
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Icon?
+Desktop.ini
+
+# Rustfmt and Clippy backups
+############################
+**/*.rs.bk
+
+# Environment and configuration
+###############################
+.env
+.env.*
+*.local
+
+# Temporary build or runtime files
+##################################
+/tmp/
+/dist/
+/out/
+/bin/
+/build/
+
+# Docker / Container related
+############################
+.docker/
+docker-compose.override.yml
+
+
+# Git
+#####
+.gitignore
+!.gitkeep
