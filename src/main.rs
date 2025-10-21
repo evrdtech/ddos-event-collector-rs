@@ -1,5 +1,5 @@
 // main.rs
-use std::net::SocketAddr;
+use std::{env, net::SocketAddr};
 use tokio::net::TcpListener;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -35,15 +35,20 @@ async fn main() -> Result<()> {
 
     tokio::spawn(retry_task(app_state.clone()));
 
-    // Try to use port 9003, but if it's in use, try port 9004
-    let port = 9003;
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let default_port = 9000;
+    let configured_port = env::var("API_PORT")
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+        .unwrap_or(default_port);
+
+    let addr = SocketAddr::from(([127, 0, 0, 1], configured_port));
     let listener = match TcpListener::bind(&addr).await {
         Ok(listener) => listener,
         Err(_) => {
-            // If port 9003 is in use, try port 9004
-            let fallback_addr = SocketAddr::from(([127, 0, 0, 1], 9004));
-            println!("Port {} is in use, trying port 9004", port);
+            // If the configured port is in use, try the next available port (wrap to default on overflow)
+            let fallback_port = configured_port.checked_add(1).unwrap_or(default_port);
+            let fallback_addr = SocketAddr::from(([127, 0, 0, 1], fallback_port));
+            println!("Port {} is in use, trying port {}", configured_port, fallback_port);
             TcpListener::bind(&fallback_addr).await?
         }
     };
@@ -54,7 +59,7 @@ async fn main() -> Result<()> {
         .layer(axum::Extension(pool));
 
     println!("🚀 Servidor rodando em http://{}", actual_addr);
-    println!("📖 Swagger UI available at http://{}/swagger-ui", actual_addr);
+    println!("📖 Swagger UI available at http://{}/api/v1/docs/", actual_addr);
 
     axum::serve(listener, app.into_make_service()).await?;
     Ok(())

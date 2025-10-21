@@ -75,7 +75,7 @@ create_openapi_doc!(
 async fn redirect_to_swagger() -> impl IntoResponse {
     (
         StatusCode::TEMPORARY_REDIRECT,
-        [(header::LOCATION, "/swagger-ui/")],
+        [(header::LOCATION, "/api/v1/docs/")],
         "Redirecting to Swagger UI..."
     )
 }
@@ -100,7 +100,7 @@ async fn swagger_ui_handler() -> Response {
         <script>
             window.onload = function() {
                 const ui = SwaggerUIBundle({
-                    url: '/api-docs/openapi.json',
+                    url: '/api/v1/docs/openapi.json',
                     dom_id: '#swagger-ui',
                     deepLinking: true,
                     presets: [
@@ -758,8 +758,8 @@ pub fn create_routes() -> Router {
         .route("/retry", post(force_retry));
 
     Router::new()
-        .route("/swagger-ui", axum::routing::get(redirect_to_swagger))
-        .route("/swagger-ui/", axum::routing::get(swagger_ui_handler))
-        .route("/api-docs/openapi.json", axum::routing::get(openapi_handler))
+        .route("/api/v1/docs", axum::routing::get(redirect_to_swagger))
+        .route("/api/v1/docs/", axum::routing::get(swagger_ui_handler))
+        .route("/api/v1/docs/openapi.json", axum::routing::get(openapi_handler))
         .nest("/api/v1", v1_router) // Nest the v1 router under /api/v1
 }
