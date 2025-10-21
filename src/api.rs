@@ -16,6 +16,8 @@ use std::net::SocketAddr;
 
 use crate::models::*;
 
+const VERSION: &str = "0.1.0";
+
 // Helper function to check if node_id is set
 async fn check_node_id_set() -> Result<(), Response> {
     if !crate::config::NODE_INFO.lock().unwrap().is_node_id_set() {
@@ -599,7 +601,8 @@ pub struct StatusResponse {
 pub struct NodeInfo {
     pub node_id: Option<String>,
     pub version: String,
-    pub region: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<String>,
     pub name: String,
     pub started_at: String,
 }
@@ -650,8 +653,8 @@ pub async fn get_status(
         pending_events,
         node_info: NodeInfo {
             node_id,
-            version: "1.1.0".to_string(),
-            region: "sa-east-1".to_string(),
+            version: VERSION.to_string(),
+            region: None,
             name: "node-01".to_string(),
             started_at: Utc::now().to_rfc3339(),
         },
@@ -708,8 +711,8 @@ pub async fn set_node_info(
         Ok(_) => {
             let node_info = NodeInfo {
                 node_id: node_info_req.node_id,
-                version: "1.1.0".to_string(),
-                region: node_info_req.region,
+                version: VERSION.to_string(),
+                region: Some(node_info_req.region),
                 name: node_info_req.name,
                 started_at: Utc::now().to_rfc3339(),
             };
