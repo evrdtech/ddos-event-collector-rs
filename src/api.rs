@@ -2,7 +2,9 @@ use axum::{
     routing::{get, post, put, delete},
     http::{StatusCode, header},
     response::{IntoResponse, Response},
-    Json, Router, extract::Extension, body::Body, extract::Path,
+    extract::{ConnectInfo, Extension, Path},
+    body::Body,
+    Json, Router,
 };
 use serde::{Serialize, Deserialize};
 use serde_json::json;
@@ -10,6 +12,7 @@ use utoipa::OpenApi;
 use utoipa::ToSchema;
 use sqlx::{SqlitePool, Row};
 use chrono::Utc;
+use std::net::SocketAddr;
 
 use crate::models::*;
 
@@ -140,9 +143,21 @@ async fn openapi_handler() -> Json<utoipa::openapi::OpenApi> {
     tag = "Event Collector"
 )]
 pub async fn webhook_handler(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Extension(pool): Extension<SqlitePool>,
     Json(input): Json<InputEvent>,
 ) -> impl IntoResponse {
+    if !addr.ip().is_loopback() {
+        let error_response = json!({
+            "error": "Forbidden",
+            "details": "This endpoint is restricted to localhost access only"
+        });
+        return (
+            StatusCode::FORBIDDEN,
+            Json(error_response)
+        );
+    }
+
     // Webhook endpoint doesn't require node_id to be set
     let event = Event::new(input);
 

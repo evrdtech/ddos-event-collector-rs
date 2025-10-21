@@ -61,7 +61,7 @@ async fn main() -> Result<()> {
     println!("🚀 Servidor rodando em http://{}", actual_addr);
     println!("📖 Swagger UI available at http://{}/api/v1/docs/", actual_addr);
 
-    axum::serve(listener, app.into_make_service()).await?;
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await?;
     Ok(())
 }
 
