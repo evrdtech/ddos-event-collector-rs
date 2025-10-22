@@ -1,13 +1,22 @@
-// broker.rs
+use std::fmt::{Debug};
 use super::models::{Broker, Destination, Event};
 use crate::config::NODE_INFO;
-use lapin::{options::{BasicPublishOptions, QueueDeclareOptions}, types::FieldTable, BasicProperties, Channel, Connection, ConnectionProperties};
-use rdkafka::client::DefaultClientContext;
-use rdkafka::config::FromClientConfig;
-use rdkafka::producer::{FutureProducer, FutureRecord};
-use rdkafka::util::TokioRuntime; // Added import for TokioRuntime
-use rustls::pki_types::{CertificateDer, ServerName};
-use rustls::{client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier}, ClientConfig, RootCertStore};
+use lapin::{
+    options::{BasicPublishOptions, QueueDeclareOptions},
+    types::FieldTable,
+    BasicProperties, Channel, Connection, ConnectionProperties,
+};
+use rdkafka::{
+    client::DefaultClientContext,
+    config::FromClientConfig,
+    producer::{FutureProducer, FutureRecord},
+    util::TokioRuntime,
+};
+use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+use rustls::{
+    client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
+    ClientConfig, RootCertStore, SignatureScheme,
+};
 use serde_json;
 use std::sync::Arc;
 use std::time::Duration;
@@ -133,6 +142,7 @@ async fn send_to_kafka(event: &Event, dest: &Destination) -> bool {
     }
 }
 
+#[derive(Debug)]
 struct AllowInvalidCertVerifier;
 
 impl ServerCertVerifier for AllowInvalidCertVerifier {
@@ -142,7 +152,7 @@ impl ServerCertVerifier for AllowInvalidCertVerifier {
         _intermediates: &[CertificateDer<'_>],
         _server_name: &ServerName<'_>,
         _ocsp_response: &[u8],
-        _now: std::time::SystemTime,
+        _now: UnixTime,
     ) -> Result<ServerCertVerified, rustls::Error> {
         Ok(ServerCertVerified::assertion())
     }
@@ -164,16 +174,35 @@ impl ServerCertVerifier for AllowInvalidCertVerifier {
     ) -> Result<HandshakeSignatureValid, rustls::Error> {
         Ok(HandshakeSignatureValid::assertion())
     }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        vec![
+            SignatureScheme::RSA_PKCS1_SHA256,
+            SignatureScheme::ECDSA_NISTP256_SHA256,
+            // SignatureScheme::RSA_PKCS1_SHA1,
+            // SignatureScheme::RSA_PKCS1_SHA256,
+            // SignatureScheme::RSA_PKCS1_SHA384,
+            // SignatureScheme::RSA_PKCS1_SHA512,
+            // SignatureScheme::ECDSA_SHA1_Legacy,
+            // SignatureScheme::ECDSA_SHA256,
+            // SignatureScheme::ECDSA_SHA384,
+            // SignatureScheme::ECDSA_SHA512,
+            // SignatureScheme::RSA_PSS_SHA256,
+            // SignatureScheme::RSA_PSS_SHA384,
+            // SignatureScheme::RSA_PSS_SHA512,
+            // SignatureScheme::ED25519,
+        ]
+    }
 }
 
 async fn connect_with_tls_options(uri: &str, allow_invalid_tls: bool) -> Result<Connection, lapin::Error> {
-    let builder = lapin::Connection::builder();
-
     if !uri.starts_with("amqp") {
-        return builder.connection_properties(ConnectionProperties::default()).connect(uri).await;
+        // For non-AMQP connections, use the standard connection method
+        return Connection::connect(uri, ConnectionProperties::default()).await;
     }
 
     if allow_invalid_tls {
+        // Create a custom TLS config that accepts invalid certificates
         let mut root_store = RootCertStore::empty();
         let client_config = ClientConfig::builder()
             .with_root_certificates(root_store)
@@ -181,13 +210,15 @@ async fn connect_with_tls_options(uri: &str, allow_invalid_tls: bool) -> Result<
 
         let client_config = Arc::new(client_config)
             .dangerous()
-            .with_custom_certificate_verifier(Arc::new(AllowInvalidCertVerifier));
+            .set_certificate_verifier(Arc::new(AllowInvalidCertVerifier)); // Changed method name
 
-        builder
-            .connection_properties(ConnectionProperties::default().with_tls(client_config))
-            .connect(uri)
-            .await
+        // Create connection properties with custom TLS config
+        let properties = ConnectionProperties::default()
+            .with_tls(client_config); // Changed to use correct method
+
+        Connection::connect(uri, properties).await
     } else {
-        builder.connection_properties(ConnectionProperties::default()).connect(uri).await
+        // For standard TLS connections
+        Connection::connect(uri, ConnectionProperties::default()).await
     }
 }
