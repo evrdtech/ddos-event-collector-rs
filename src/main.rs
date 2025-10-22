@@ -1,5 +1,6 @@
 // main.rs
 use anyhow::anyhow;
+use rustls::crypto::ring;
 use std::{env, io, net::SocketAddr};
 use tokio::net::{lookup_host, TcpListener};
 use tracing_subscriber::util::SubscriberInitExt;
@@ -80,6 +81,10 @@ async fn main() -> Result<()> {
         .try_init()?;
 
     let pool = SqlitePool::connect("sqlite:events.db?mode=rwc").await?;
+
+    ring::default_provider()
+        .install_default()
+        .expect("failed to install rustls ring crypto provider");
     init_db(&pool).await?;
     config::NodeInfo::load_from_db(&pool).await?;
 
@@ -140,7 +145,7 @@ pub async fn retry_pending_events(pool: &SqlitePool) {
         };
 
         let destinations: Vec<Destination> = sqlx::query_as::<_, Destination>(
-            "SELECT id, broker, topic_queue, connection_url, enabled FROM destinations WHERE enabled = 1"
+            "SELECT id, broker, topic_queue, connection_url, enabled, allow_invalid_tls FROM destinations WHERE enabled = 1"
         )
             .fetch_all(pool)
             .await

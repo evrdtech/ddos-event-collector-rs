@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS destinations (
         topic_queue TEXT NOT NULL,
         connection_url TEXT NOT NULL,
         enabled BOOLEAN NOT NULL DEFAULT 1,
+        allow_invalid_tls BOOLEAN NOT NULL DEFAULT 0,
         UNIQUE(broker, topic_queue, connection_url)
     );
 

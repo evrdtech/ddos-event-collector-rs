@@ -1,17 +1,18 @@
 // broker.rs
-use super::models::{Event, Destination, Broker};
+use super::models::{Broker, Destination, Event};
 use crate::config::NODE_INFO;
-use lapin::{Connection, Channel};
-use lapin::options::{QueueDeclareOptions, BasicPublishOptions};
-use lapin::types::FieldTable;
-use lapin::BasicProperties; // Added import for AMQPProperties
-use rdkafka::producer::{FutureProducer, FutureRecord};
-use rdkafka::config::FromClientConfig;
+use lapin::{options::{BasicPublishOptions, QueueDeclareOptions}, types::FieldTable, BasicProperties, Channel, Connection, ConnectionProperties};
 use rdkafka::client::DefaultClientContext;
+use rdkafka::config::FromClientConfig;
+use rdkafka::producer::{FutureProducer, FutureRecord};
 use rdkafka::util::TokioRuntime; // Added import for TokioRuntime
+use rustls::pki_types::{CertificateDer, ServerName};
+use rustls::{client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier}, ClientConfig, RootCertStore};
 use serde_json;
+use std::sync::Arc;
 use std::time::Duration;
 use tracing::error;
+use url::Url;
 
 pub async fn send_to_destination(event: &Event, dest: &Destination) -> bool {
     let mut event_with_node = event.clone();
@@ -25,7 +26,7 @@ pub async fn send_to_destination(event: &Event, dest: &Destination) -> bool {
 
 async fn send_to_rabbitmq(event: &Event, dest: &Destination) -> bool {
     let conn_str = &dest.connection_url;
-    match Connection::connect(conn_str, Default::default()).await {
+    match connect_with_tls_options(conn_str, dest.allow_invalid_tls).await {
         Ok(conn) => {
             match conn.create_channel().await {
                 Ok(channel) => {
@@ -46,21 +47,39 @@ async fn send_to_rabbitmq(event: &Event, dest: &Destination) -> bool {
                     ).await {
                         Ok(_) => true,
                         Err(e) => {
-                            error!("Failed to publish to RabbitMQ: {}", e);
+                            let redacted = redact_amqp_password(conn_str);
+                            error!("Failed to publish to RabbitMQ ({}): {}", redacted, e);
                             false
                         }
                     }
                 }
                 Err(e) => {
-                    error!("Failed to create RabbitMQ channel: {}", e);
+                    let redacted = redact_amqp_password(conn_str);
+                    error!("Failed to create RabbitMQ channel ({}): {}", redacted, e);
                     false
                 }
             }
         }
         Err(e) => {
-            error!("Failed to connect to RabbitMQ: {}", e);
+            let redacted = redact_amqp_password(conn_str);
+            error!("Failed to connect to RabbitMQ ({}): {}", redacted, e);
             false
         }
+    }
+}
+
+fn redact_amqp_password(url: &str) -> String {
+    const PASSWORD_MASK: &str = "***********";
+    match Url::parse(url) {
+        Ok(mut parsed) => {
+            if parsed.password().is_some() {
+                let _ = parsed.set_password(Some(PASSWORD_MASK));
+                parsed.into()
+            } else {
+                url.to_owned()
+            }
+        }
+        Err(_) => url.to_owned(),
     }
 }
 
@@ -111,5 +130,64 @@ async fn send_to_kafka(event: &Event, dest: &Destination) -> bool {
             error!("Failed to send to Kafka: {}", e);
             false
         }
+    }
+}
+
+struct AllowInvalidCertVerifier;
+
+impl ServerCertVerifier for AllowInvalidCertVerifier {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: std::time::SystemTime,
+    ) -> Result<ServerCertVerified, rustls::Error> {
+        Ok(ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        Ok(HandshakeSignatureValid::assertion())
+    }
+}
+
+async fn connect_with_tls_options(uri: &str, allow_invalid_tls: bool) -> Result<Connection, lapin::Error> {
+    let builder = lapin::Connection::builder();
+
+    if !uri.starts_with("amqp") {
+        return builder.connection_properties(ConnectionProperties::default()).connect(uri).await;
+    }
+
+    if allow_invalid_tls {
+        let mut root_store = RootCertStore::empty();
+        let client_config = ClientConfig::builder()
+            .with_root_certificates(root_store)
+            .with_no_client_auth();
+
+        let client_config = Arc::new(client_config)
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(AllowInvalidCertVerifier));
+
+        builder
+            .connection_properties(ConnectionProperties::default().with_tls(client_config))
+            .connect(uri)
+            .await
+    } else {
+        builder.connection_properties(ConnectionProperties::default()).connect(uri).await
     }
 }

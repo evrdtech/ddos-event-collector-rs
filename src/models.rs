@@ -64,6 +64,8 @@ pub struct Destination {
     pub topic_queue: String,
     pub connection_url: String,
     pub enabled: bool,
+    #[serde(default)]
+    pub allow_invalid_tls: bool,
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -73,6 +75,8 @@ pub struct NewDestination {
     pub connection_url: String,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+    #[serde(default)]
+    pub allow_invalid_tls: bool,
 }
 
 // Function to provide default value for enabled field

@@ -2,17 +2,17 @@ use axum::{
     routing::{get, post, put, delete},
     http::{StatusCode, header},
     response::{IntoResponse, Response},
-    extract::{ConnectInfo, Extension, Path},
+    extract::{ConnectInfo, Extension, Path, Query},
     body::Body,
     Json, Router,
 };
 use serde::{Serialize, Deserialize};
 use serde_json::json;
-use utoipa::OpenApi;
-use utoipa::ToSchema;
+use utoipa::{IntoParams, OpenApi, ToSchema};
 use sqlx::{SqlitePool, Row};
 use chrono::Utc;
 use std::net::SocketAddr;
+use tracing::error;
 
 use crate::models::*;
 
@@ -66,6 +66,7 @@ create_openapi_doc!(
     update_destination,
     delete_destination,
     get_status,
+    list_pending_events,
     set_node_info,
     force_retry;
     InputEvent,
@@ -76,7 +77,10 @@ create_openapi_doc!(
     NewDestination,
     NodeInfoRequest,
     StatusResponse,
-    NodeInfo
+    NodeInfo,
+    PendingEvent,
+    PendingEventQuery,
+    PendingEventResponse
 );
 
 // Handler for redirecting to Swagger UI with trailing slash
@@ -216,7 +220,7 @@ pub async fn list_destinations(Extension(pool): Extension<SqlitePool>) -> Respon
         return response;
     }
 
-    let dests = sqlx::query_as::<_, Destination>("SELECT id, broker, topic_queue, connection_url, enabled FROM destinations WHERE enabled = 1")
+    let dests = sqlx::query_as::<_, Destination>("SELECT id, broker, topic_queue, connection_url, enabled, allow_invalid_tls FROM destinations WHERE enabled = 1")
         .fetch_all(&pool)
         .await
         .unwrap_or_default();
@@ -591,6 +595,114 @@ pub async fn delete_destination(
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/pending",
+    params(PendingEventQuery),
+    responses(
+        (status = 200, description = "List pending events with pagination", body = PendingEventResponse),
+        (status = 412, description = "Node ID not set", body = serde_json::Value),
+        (status = 500, description = "Database error", body = serde_json::Value)
+    ),
+    tag = "Event Collector"
+)]
+pub async fn list_pending_events(
+    Extension(pool): Extension<SqlitePool>,
+    Query(query): Query<PendingEventQuery>,
+) -> Response {
+    if let Err(response) = check_node_id_set().await {
+        return response;
+    }
+
+    let per_page = query.per_page.clamp(1, 100);
+    let total = match sqlx::query("SELECT COUNT(*) as count FROM pending_events")
+        .fetch_one(&pool)
+        .await
+    {
+        Ok(row) => row.get::<i64, _>("count"),
+        Err(e) => {
+            tracing::error!("Failed to count pending events: {}", e);
+            let error_response = json!({
+                "error": "Database error",
+                "details": e.to_string()
+            });
+            return Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(serde_json::to_vec(&error_response).unwrap()))
+                .unwrap();
+        }
+    };
+
+    let last_page = if total <= 0 {
+        1
+    } else {
+        ((total - 1) / per_page as i64) + 1
+    };
+    let max_page = last_page.clamp(1, u32::MAX as i64) as u32;
+    let page = query.page.max(1).min(max_page);
+
+    let offset = ((page - 1) as i64) * per_page as i64;
+
+    let rows = match sqlx::query(
+        "SELECT id, event_data, created_at FROM pending_events ORDER BY created_at ASC, id ASC LIMIT ? OFFSET ?"
+    )
+        .bind(per_page as i64)
+        .bind(offset)
+        .fetch_all(&pool)
+        .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            error!("Failed to fetch pending events: {}", e);
+            let error_response = json!({
+                "error": "Database error",
+                "details": e.to_string()
+            });
+            return Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(serde_json::to_vec(&error_response).unwrap()))
+                .unwrap();
+        }
+    };
+
+    let events = rows
+        .into_iter()
+        .map(|row| {
+            let id: i64 = row.get("id");
+            let payload: String = row.get("event_data");
+            let event_data = serde_json::from_str(&payload).unwrap_or_else(|e| {
+                tracing::warn!(
+                    "Failed to parse pending event {} payload as JSON: {}",
+                    id,
+                    e
+                );
+                serde_json::Value::String(payload)
+            });
+            let enqueued_at = row.try_get::<String, _>("created_at").ok();
+            PendingEvent {
+                id,
+                event_data,
+                enqueued_at,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let response_body = PendingEventResponse {
+        total,
+        page,
+        per_page,
+        events,
+    };
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::to_vec(&response_body).unwrap()))
+        .unwrap()
+}
+
 #[derive(Serialize, Deserialize, ToSchema)]
 pub struct StatusResponse {
     pub status: String,
@@ -598,6 +710,41 @@ pub struct StatusResponse {
     pub total_destinations: i64,
     pub pending_events: i64,
     pub node_info: NodeInfo,
+}
+
+#[derive(Serialize, Deserialize, ToSchema)]
+pub struct PendingEventResponse {
+    pub total: i64,
+    pub page: u32,
+    pub per_page: u32,
+    pub events: Vec<PendingEvent>,
+}
+
+#[derive(Serialize, Deserialize, ToSchema)]
+pub struct PendingEvent {
+    pub id: i64,
+    pub event_data: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enqueued_at: Option<String>,
+}
+
+#[derive(Deserialize, IntoParams, ToSchema)]
+#[into_params(parameter_in = Query)]
+pub struct PendingEventQuery {
+    #[serde(default = "default_page")]
+    #[param(default = 1, minimum = 1)]
+    pub page: u32,
+    #[serde(default = "default_per_page")]
+    #[param(default = 25, minimum = 1, maximum = 100)]
+    pub per_page: u32,
+}
+
+fn default_page() -> u32 {
+    1
+}
+
+fn default_per_page() -> u32 {
+    25
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]
@@ -751,7 +898,9 @@ pub async fn set_node_info(
     ),
     tag = "Event Collector"
 )]
-pub async fn force_retry(Extension(pool): Extension<SqlitePool>) -> Response {
+pub async fn force_retry(
+    Extension(pool): Extension<SqlitePool>,
+) -> Response {
     // Check if node_id is set
     if let Err(response) = check_node_id_set().await {
         return response;
@@ -775,6 +924,7 @@ pub fn create_routes() -> Router {
         .route("/destinations/{id}", put(update_destination))
         .route("/destinations/{id}", delete(delete_destination))
         .route("/status", get(get_status))
+        .route("/pending", get(list_pending_events))
         .route("/node-info", put(set_node_info))
         .route("/retry", post(force_retry));
 
