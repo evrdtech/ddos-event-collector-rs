@@ -1,6 +1,7 @@
 // main.rs
-use std::{env, net::SocketAddr};
-use tokio::net::TcpListener;
+use anyhow::anyhow;
+use std::{env, io, net::SocketAddr};
+use tokio::net::{lookup_host, TcpListener};
 use tracing_subscriber::util::SubscriberInitExt;
 
 mod models;
@@ -20,6 +21,57 @@ struct AppState {
     pool: SqlitePool,
 }
 
+async fn resolve_listen_addr(value: &str, port: u16) -> io::Result<SocketAddr> {
+    // Support IPv4/IPv6 literal addresses
+    if let Ok(parsed_ip) = value.parse() {
+        return Ok(SocketAddr::new(parsed_ip, port));
+    }
+
+    // Resolve hostnames (e.g., localhost) to available addresses
+    let mut addresses: Vec<SocketAddr> = lookup_host((value, port)).await?.collect();
+
+    if value.eq_ignore_ascii_case("localhost") {
+        // Prefer IPv6, but fall back to IPv4 if only v4 is available
+        addresses.sort_by_key(|addr| if addr.is_ipv6() { 0 } else { 1 });
+    }
+
+    addresses
+        .into_iter()
+        .next()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "unable to resolve API_ADDR"))
+}
+
+fn fallback_address(current: &SocketAddr, fallback_port: u16) -> SocketAddr {
+    SocketAddr::new(current.ip(), fallback_port)
+}
+
+#[derive(Debug)]
+struct Args {
+    host: String,
+    port: u16,
+}
+
+impl Args {
+    fn parse() -> Result<Self> {
+        let mut host: Option<String> = None;
+        let mut port: Option<u16> = None;
+
+        for arg in env::args().skip(1) {
+            if let Some(value) = arg.strip_prefix("--host=") {
+                host = Some(value.to_string());
+            } else if let Some(value) = arg.strip_prefix("--port=") {
+                let parsed_port = value.parse::<u16>().map_err(|_| anyhow!("invalid port"))?;
+                port = Some(parsed_port);
+            }
+        }
+
+        Ok(Self {
+            host: host.unwrap_or_else(|| "127.0.0.1".to_string()),
+            port: port.unwrap_or(9000),
+        })
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -35,20 +87,20 @@ async fn main() -> Result<()> {
 
     tokio::spawn(retry_task(app_state.clone()));
 
-    let default_port = 9000;
-    let configured_port = env::var("API_PORT")
-        .ok()
-        .and_then(|value| value.parse::<u16>().ok())
-        .unwrap_or(default_port);
+    let args = Args::parse()?;
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], configured_port));
-    let listener = match TcpListener::bind(&addr).await {
+    let listen_addr = resolve_listen_addr(&args.host, args.port).await?;
+
+    let listener = match TcpListener::bind(&listen_addr).await {
         Ok(listener) => listener,
         Err(_) => {
             // If the configured port is in use, try the next available port (wrap to default on overflow)
-            let fallback_port = configured_port.checked_add(1).unwrap_or(default_port);
-            let fallback_addr = SocketAddr::from(([127, 0, 0, 1], fallback_port));
-            println!("Port {} is in use, trying port {}", configured_port, fallback_port);
+            let fallback_port = args.port.checked_add(1).unwrap_or(9000);
+            let fallback_addr = fallback_address(&listen_addr, fallback_port);
+            println!(
+                "Port {} is in use for {}, trying {}",
+                args.port, listen_addr, fallback_addr
+            );
             TcpListener::bind(&fallback_addr).await?
         }
     };
