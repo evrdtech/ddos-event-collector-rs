@@ -1,4 +1,3 @@
-use std::fmt::{Debug};
 use super::models::{Broker, Destination, Event};
 use crate::config::NODE_INFO;
 use lapin::{
@@ -12,13 +11,7 @@ use rdkafka::{
     producer::{FutureProducer, FutureRecord},
     util::TokioRuntime,
 };
-use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-use rustls::{
-    client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
-    ClientConfig, RootCertStore, SignatureScheme,
-};
 use serde_json;
-use std::sync::Arc;
 use std::time::Duration;
 use tracing::error;
 use url::Url;
@@ -35,7 +28,7 @@ pub async fn send_to_destination(event: &Event, dest: &Destination) -> bool {
 
 async fn send_to_rabbitmq(event: &Event, dest: &Destination) -> bool {
     let conn_str = &dest.connection_url;
-    match connect_with_tls_options(conn_str, dest.allow_invalid_tls).await {
+    match Connection::connect(conn_str, ConnectionProperties::default()).await {
         Ok(conn) => {
             match conn.create_channel().await {
                 Ok(channel) => {
@@ -139,86 +132,5 @@ async fn send_to_kafka(event: &Event, dest: &Destination) -> bool {
             error!("Failed to send to Kafka: {}", e);
             false
         }
-    }
-}
-
-#[derive(Debug)]
-struct AllowInvalidCertVerifier;
-
-impl ServerCertVerifier for AllowInvalidCertVerifier {
-    fn verify_server_cert(
-        &self,
-        _end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
-        _server_name: &ServerName<'_>,
-        _ocsp_response: &[u8],
-        _now: UnixTime,
-    ) -> Result<ServerCertVerified, rustls::Error> {
-        Ok(ServerCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(HandshakeSignatureValid::assertion())
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        Ok(HandshakeSignatureValid::assertion())
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        vec![
-            SignatureScheme::RSA_PKCS1_SHA256,
-            SignatureScheme::ECDSA_NISTP256_SHA256,
-            // SignatureScheme::RSA_PKCS1_SHA1,
-            // SignatureScheme::RSA_PKCS1_SHA256,
-            // SignatureScheme::RSA_PKCS1_SHA384,
-            // SignatureScheme::RSA_PKCS1_SHA512,
-            // SignatureScheme::ECDSA_SHA1_Legacy,
-            // SignatureScheme::ECDSA_SHA256,
-            // SignatureScheme::ECDSA_SHA384,
-            // SignatureScheme::ECDSA_SHA512,
-            // SignatureScheme::RSA_PSS_SHA256,
-            // SignatureScheme::RSA_PSS_SHA384,
-            // SignatureScheme::RSA_PSS_SHA512,
-            // SignatureScheme::ED25519,
-        ]
-    }
-}
-
-async fn connect_with_tls_options(uri: &str, allow_invalid_tls: bool) -> Result<Connection, lapin::Error> {
-    if !uri.starts_with("amqp") {
-        // For non-AMQP connections, use the standard connection method
-        return Connection::connect(uri, ConnectionProperties::default()).await;
-    }
-
-    if allow_invalid_tls {
-        // Create a custom TLS config that accepts invalid certificates
-        let mut root_store = RootCertStore::empty();
-        let client_config = ClientConfig::builder()
-            .with_root_certificates(root_store)
-            .with_no_client_auth();
-
-        let client_config = Arc::new(client_config)
-            .dangerous()
-            .set_certificate_verifier(Arc::new(AllowInvalidCertVerifier)); // Changed method name
-
-        // Create connection properties with custom TLS config
-        let properties = ConnectionProperties::default()
-            .with_tls(client_config); // Changed to use correct method
-
-        Connection::connect(uri, properties).await
-    } else {
-        // For standard TLS connections
-        Connection::connect(uri, ConnectionProperties::default()).await
     }
 }

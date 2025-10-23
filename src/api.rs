@@ -220,7 +220,7 @@ pub async fn list_destinations(Extension(pool): Extension<SqlitePool>) -> Respon
         return response;
     }
 
-    let dests = sqlx::query_as::<_, Destination>("SELECT id, broker, topic_queue, connection_url, enabled, allow_invalid_tls FROM destinations WHERE enabled = 1")
+    let dests = sqlx::query_as::<_, Destination>("SELECT id, broker, topic_queue, connection_url, enabled FROM destinations WHERE enabled = 1")
         .fetch_all(&pool)
         .await
         .unwrap_or_default();
@@ -257,13 +257,12 @@ pub async fn add_destination(
 
     // Insert the destination and get the last inserted ID
     let result = sqlx::query(
-        "INSERT INTO destinations (broker, topic_queue, connection_url, enabled, allow_invalid_tls) VALUES (?, ?, ?, ?, ?)"
+        "INSERT INTO destinations (broker, topic_queue, connection_url, enabled) VALUES (?, ?, ?, ?)"
     )
         .bind(new_dest.broker.to_string())
         .bind(&new_dest.topic_queue)
         .bind(&new_dest.connection_url)
         .bind(new_dest.enabled)
-        .bind(new_dest.allow_invalid_tls)
         .execute(&pool)
         .await;
 
@@ -271,7 +270,7 @@ pub async fn add_destination(
         Ok(_) => {
             // Try to get the newly created destination by matching on unique fields
             match sqlx::query_as::<_, Destination>(
-                "SELECT id, broker, topic_queue, connection_url, enabled, allow_invalid_tls FROM destinations WHERE broker = ? AND topic_queue = ? AND connection_url = ? ORDER BY id DESC LIMIT 1"
+                "SELECT id, broker, topic_queue, connection_url, enabled FROM destinations WHERE broker = ? AND topic_queue = ? AND connection_url = ? ORDER BY id DESC LIMIT 1"
             )
                 .bind(new_dest.broker.to_string())
                 .bind(&new_dest.topic_queue)
@@ -308,7 +307,7 @@ pub async fn add_destination(
 
                     // Try to get all destinations to see if any were inserted
                     match sqlx::query_as::<_, Destination>(
-                        "SELECT id, broker, topic_queue, connection_url, enabled, allow_invalid_tls FROM destinations ORDER BY id DESC LIMIT 5"
+                        "SELECT id, broker, topic_queue, connection_url, enabled FROM destinations ORDER BY id DESC LIMIT 5"
                     )
                         .fetch_all(&pool)
                         .await
@@ -409,7 +408,7 @@ pub async fn update_destination(
 
     // Check if the destination exists
     match sqlx::query_as::<_, Destination>(
-        "SELECT id, broker, topic_queue, connection_url, enabled, allow_invalid_tls FROM destinations WHERE id = ?"
+        "SELECT id, broker, topic_queue, connection_url, enabled FROM destinations WHERE id = ?"
     )
         .bind(id)
         .fetch_one(&pool)
@@ -418,13 +417,12 @@ pub async fn update_destination(
         Ok(_) => {
             // Update the destination
             let result = sqlx::query(
-                "UPDATE destinations SET broker = ?, topic_queue = ?, connection_url = ?, enabled = ?, allow_invalid_tls = ? WHERE id = ?"
+                "UPDATE destinations SET broker = ?, topic_queue = ?, connection_url = ?, enabled = ? WHERE id = ?"
             )
                 .bind(update_dest.broker.to_string())
                 .bind(&update_dest.topic_queue)
                 .bind(&update_dest.connection_url)
                 .bind(update_dest.enabled)
-                .bind(update_dest.allow_invalid_tls)
                 .bind(id)
                 .execute(&pool)
                 .await;
@@ -433,7 +431,7 @@ pub async fn update_destination(
                 Ok(_) => {
                     // Get the updated destination
                     match sqlx::query_as::<_, Destination>(
-                        "SELECT id, broker, topic_queue, connection_url, enabled, allow_invalid_tls FROM destinations WHERE id = ?"
+                        "SELECT id, broker, topic_queue, connection_url, enabled FROM destinations WHERE id = ?"
                     )
                         .bind(id)
                         .fetch_one(&pool)
@@ -549,7 +547,7 @@ pub async fn delete_destination(
 
     // Check if the destination exists
     match sqlx::query_as::<_, Destination>(
-        "SELECT id, broker, topic_queue, connection_url, enabled, allow_invalid_tls FROM destinations WHERE id = ?"
+        "SELECT id, broker, topic_queue, connection_url, enabled FROM destinations WHERE id = ?"
     )
         .bind(id)
         .fetch_one(&pool)
